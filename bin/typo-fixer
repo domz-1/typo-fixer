@@ -39,7 +39,8 @@ ARABIC_COMMON_WORDS = {
     "نعم", "لا", "صباح", "مساء", "الخير", "النور", "الله", "انشاء", "إن", "شاء", "في", "من",
     "على", "عن", "مع", "الى", "إلى", "هذا", "هذه", "ذلك", "تلك", "هو", "هي", "هم", "نحن", "أنا", "انا",
     "انت", "أنت", "انتم", "أنتم", "كان", "يكون", "تكون", "تم", "تطبيق", "نظام", "برنامج", "ملف", "كتابة",
-    "عايز", "محتاج", "ممكن", "فين", "ليه", "ازاي", "إزاي", "شغال", "مش", "كله", "تمام", "يا", "اخي", "أخي"
+    "عايز", "محتاج", "ممكن", "فين", "ليه", "ازاي", "إزاي", "شغال", "مش", "كله", "تمام", "يا", "اخي", "أخي",
+    "جميل", "حلو", "كويس", "شكر", "معك", "معي", "عندي", "عندك", "فيه", "فيها", "منك", "مني"
 }
 
 # Keyboard layout character maps
@@ -63,24 +64,38 @@ def en_to_ar(text):
 
 def detect_accidental_layout(text):
     has_ar = any('\u0600' <= c <= '\u06FF' for c in text)
-    if has_ar and WORDS:
-        converted = ar_to_en(text)
-        words = [re.sub(r'[^\w]', '', w) for w in converted.lower().split()]
-        words = [w for w in words if w]
-        if words:
-            matches = sum(1 for w in words if w in WORDS or w in COMMON_TYPOS)
-            if (matches / len(words)) >= 0.4 or any((w in WORDS or w in COMMON_TYPOS) and len(w) >= 3 for w in words):
-                return converted, "en"
-
     has_en = any(c.isascii() and c.isalpha() for c in text)
-    if has_en:
+
+    # 1. Arabic text: check if it was typed accidentally instead of English
+    if has_ar and not has_en:
+        ar_words = [re.sub(r'[^\w]', '', w) for w in text.split()]
+        real_ar_count = sum(1 for w in ar_words if w in ARABIC_COMMON_WORDS)
+        
+        converted = ar_to_en(text)
+        en_words = [re.sub(r'[^\w]', '', w) for w in converted.lower().split()]
+        en_matches = sum(1 for w in en_words if w in WORDS or w in COMMON_TYPOS)
+
+        if en_matches > 0 and (en_matches >= len(en_words) * 0.4):
+            if real_ar_count == 0 or en_matches > real_ar_count:
+                return converted, "en"
+        return text, "ar"
+
+    # 2. English text: check if it was typed accidentally instead of Arabic
+    if has_en and not has_ar:
+        en_words = [re.sub(r'[^\w]', '', w) for w in text.lower().split()]
+        en_matches = sum(1 for w in en_words if w in WORDS or w in COMMON_TYPOS or len(w) <= 2)
+        
+        # If English text already has high English validity, keep it English!
+        if en_matches >= len(en_words) * 0.3:
+            return text, "en"
+
         converted = en_to_ar(text)
-        words = [re.sub(r'[^\w]', '', w) for w in converted.split()]
-        words = [w for w in words if w]
-        if words:
-            matches = sum(1 for w in words if w in ARABIC_COMMON_WORDS or w.startswith("ال") or len(w) >= 4)
-            if (matches / len(words)) >= 0.5:
-                return converted, "ar"
+        ar_words = [re.sub(r'[^\w]', '', w) for w in converted.split()]
+        ar_matches = sum(1 for w in ar_words if w in ARABIC_COMMON_WORDS)
+
+        if ar_matches > 0 and (ar_matches >= len(ar_words) * 0.4):
+            return converted, "ar"
+        return text, "en"
 
     return text, "auto"
 
@@ -117,7 +132,6 @@ def correct_word(w):
         return rep
     if clean in WORDS:
         return w
-    # Fuzzy dictionary match
     matches = difflib.get_close_matches(clean, WORDS, n=1, cutoff=0.75)
     if matches:
         rep = matches[0]
@@ -162,7 +176,7 @@ def fix_text(text):
     # 1. Accidental layout
     text, detected_lang = detect_accidental_layout(text)
 
-    # 2. Dictionary & typo map pass (fast & precise)
+    # 2. Dictionary & typo map pass (only if English)
     if detected_lang in ["en", "auto"]:
         text = fix_with_dictionary(text)
 
