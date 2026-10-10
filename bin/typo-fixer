@@ -1,0 +1,233 @@
+#!/usr/bin/env python3
+import subprocess
+import urllib.request
+import urllib.parse
+import json
+import sys
+import os
+import re
+import time
+import difflib
+
+os.environ["DISPLAY"] = os.environ.get("DISPLAY", ":0")
+
+# 1. Load English dictionary for high-precision spell check and layout detection
+WORDS = set()
+try:
+    with open("/usr/share/dict/words", "r", encoding="utf-8", errors="ignore") as f:
+        WORDS = set(line.strip().lower() for line in f)
+except Exception:
+    pass
+
+# Common typo direct map for precision
+COMMON_TYPOS = {
+    "wnat": "want", "teh": "the", "amke": "make", "coroet": "correct", "coroect": "correct",
+    "speieng": "spelling", "meistck": "mistake", "mistakc": "mistake", "shorcir": "shortcut",
+    "prese": "precise", "pelae": "please", "exison": "extension", "exiosns": "extensions",
+    "etx": "text", "past": "paste", "kb": "keyboard", "woneely": "wrongly", "mistyeneg": "mistyping",
+    "punktuaion": "punctuation", "arbci": "Arabic", "wheil": "while", "thing": "think", "wokrirng": "working",
+    "pls": "please", "plz": "please", "bc": "because", "cuz": "because", "idk": "I don't know",
+    "imo": "in my opinion", "thx": "thanks", "ty": "thank you", "u": "you", "ur": "your", "r": "are",
+    "hes": "he's", "shes": "she's", "cant": "can't", "wont": "won't", "dont": "don't", "didnt": "didn't",
+    "isnt": "isn't", "arent": "aren't", "couldnt": "couldn't", "wouldnt": "wouldn't", "shouldnt": "shouldn't",
+    "thats": "that's", "whats": "what's", "wheres": "where's", "hows": "how's", "whens": "when's"
+}
+
+# Arabic common words for layout detection
+ARABIC_COMMON_WORDS = {
+    "سلام", "عليكم", "مرحبا", "اهلا", "أهلا", "الان", "الآن", "كيف", "حالك", "شكرا", "شكراً",
+    "نعم", "لا", "صباح", "مساء", "الخير", "النور", "الله", "انشاء", "إن", "شاء", "في", "من",
+    "على", "عن", "مع", "الى", "إلى", "هذا", "هذه", "ذلك", "تلك", "هو", "هي", "هم", "نحن", "أنا", "انا",
+    "انت", "أنت", "انتم", "أنتم", "كان", "يكون", "تكون", "تم", "تطبيق", "نظام", "برنامج", "ملف", "كتابة",
+    "عايز", "محتاج", "ممكن", "فين", "ليه", "ازاي", "إزاي", "شغال", "مش", "كله", "تمام", "يا", "اخي", "أخي"
+}
+
+# Keyboard layout character maps
+EN_CHARS = "qwertyuiop[]asdfghjkl;'zxcvbnm,./`QWERTYUIOP{}ASDFGHJKL:\"ZXCVBNM<>?~"
+AR_CHARS = "ضصثقفغعهخحجدشسيبلاتنمكطئءؤرىةوزظذًٌَُلإإ‘÷×؛<>ٍِ][لأأـ،/:\"~ْ}{لآآ’،.؟ّ"
+
+en_to_ar_map = dict(zip(EN_CHARS, AR_CHARS))
+en_to_ar_map["b"] = "لا"
+ar_to_en_map = {v: k for k, v in zip(EN_CHARS, AR_CHARS)}
+ar_to_en_map["لا"] = "b"
+ar_to_en_map["لأ"] = "G"
+ar_to_en_map["لإ"] = "T"
+ar_to_en_map["لآ"] = "B"
+
+def ar_to_en(text):
+    t = text.replace("لا", "b").replace("لأ", "G").replace("لإ", "T").replace("لآ", "B")
+    return "".join(ar_to_en_map.get(c, c) for c in t)
+
+def en_to_ar(text):
+    return "".join(en_to_ar_map.get(c, c) for c in text)
+
+def detect_accidental_layout(text):
+    has_ar = any('\u0600' <= c <= '\u06FF' for c in text)
+    if has_ar and WORDS:
+        converted = ar_to_en(text)
+        words = [re.sub(r'[^\w]', '', w) for w in converted.lower().split()]
+        words = [w for w in words if w]
+        if words:
+            matches = sum(1 for w in words if w in WORDS or w in COMMON_TYPOS)
+            if (matches / len(words)) >= 0.4 or any((w in WORDS or w in COMMON_TYPOS) and len(w) >= 3 for w in words):
+                return converted, "en"
+
+    has_en = any(c.isascii() and c.isalpha() for c in text)
+    if has_en:
+        converted = en_to_ar(text)
+        words = [re.sub(r'[^\w]', '', w) for w in converted.split()]
+        words = [w for w in words if w]
+        if words:
+            matches = sum(1 for w in words if w in ARABIC_COMMON_WORDS or w.startswith("ال") or len(w) >= 4)
+            if (matches / len(words)) >= 0.5:
+                return converted, "ar"
+
+    return text, "auto"
+
+def run_cmd(cmd):
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=2)
+        return res.stdout.strip()
+    except Exception:
+        return ""
+
+def get_text():
+    # Try copy from active selection
+    run_cmd(["copyq", "copy"])
+    time.sleep(0.04)
+
+    text = run_cmd(["xclip", "-o", "-selection", "primary"])
+    if text: return text
+    text = run_cmd(["xclip", "-o", "-selection", "clipboard"])
+    if text: return text
+    text = run_cmd(["copyq", "selection"])
+    if text: return text
+    text = run_cmd(["copyq", "clipboard"])
+    if text: return text
+    return ""
+
+def correct_word(w):
+    clean = re.sub(r"[^\w']", "", w.lower())
+    if not clean:
+        return w
+    if clean in COMMON_TYPOS:
+        rep = COMMON_TYPOS[clean]
+        if w.isupper(): return rep.upper()
+        if w[0].isupper(): return rep.capitalize()
+        return rep
+    if clean in WORDS:
+        return w
+    # Fuzzy dictionary match
+    matches = difflib.get_close_matches(clean, WORDS, n=1, cutoff=0.75)
+    if matches:
+        rep = matches[0]
+        if w.isupper(): return rep.upper()
+        if w[0].isupper(): return rep.capitalize()
+        return rep
+    return w
+
+def fix_with_dictionary(text):
+    words = text.split()
+    return " ".join(correct_word(w) for w in words)
+
+def fix_with_languagetool(text, lang="auto"):
+    data = urllib.parse.urlencode({"text": text, "language": lang}).encode("utf-8")
+    req = urllib.request.Request("https://api.languagetool.org/v2/check", data=data, headers={"User-Agent": "TypoFixer/1.0"})
+    with urllib.request.urlopen(req, timeout=4) as res:
+        result = json.loads(res.read().decode("utf-8"))
+        chars = list(text)
+        for match in sorted(result.get("matches", []), key=lambda m: m["offset"], reverse=True):
+            offset = match["offset"]
+            length = match["length"]
+            replacements = match.get("replacements", [])
+            if replacements:
+                repl = replacements[0]["value"]
+                chars[offset:offset+length] = list(repl)
+        return "".join(chars)
+
+def format_punctuation_and_caps(text):
+    if not text: return ""
+    text = text.strip()
+    if text and text[0].isascii() and text[0].isalpha():
+        text = text[0].upper() + text[1:]
+    
+    question_words = ["what", "who", "where", "when", "why", "how", "is", "are", "can", "could", "would", "do", "does", "did"]
+    first_word = text.split()[0].lower().strip(".,!?;:") if text.split() else ""
+    if first_word in question_words and not text.endswith(("?", ".", "!")):
+        text += "?"
+    return text
+
+def fix_text(text):
+    if not text: return ""
+    # 1. Accidental layout
+    text, detected_lang = detect_accidental_layout(text)
+
+    # 2. Dictionary & typo map pass (fast & precise)
+    if detected_lang in ["en", "auto"]:
+        text = fix_with_dictionary(text)
+
+    # 3. LanguageTool grammar / spelling check
+    try:
+        lt_fixed = fix_with_languagetool(text, lang=detected_lang)
+        if lt_fixed and lt_fixed.strip():
+            text = lt_fixed
+    except Exception:
+        pass
+
+    # 4. Capitalization & Punctuation
+    text = format_punctuation_and_caps(text)
+    return text
+
+def main():
+    text = ""
+    if len(sys.argv) > 1:
+        text = " ".join(sys.argv[1:]).strip()
+    
+    if not text:
+        text = get_text()
+
+    if not text:
+        try:
+            p = subprocess.run([
+                "zenity", "--entry", 
+                "--title=Typo Fixer", 
+                "--text=اكتب أو الصق النص الخاطئ هنا لتصحيحه تلقائياً:"
+            ], capture_output=True, text=True, timeout=30)
+            if p.returncode == 0:
+                text = p.stdout.strip()
+        except Exception:
+            pass
+
+    if not text:
+        run_cmd(["notify-send", "-u", "low", "Typo Fixer", "⚠️ حدد النص أو انسخه أولاً"])
+        return
+
+    fixed = fix_text(text)
+    if not fixed:
+        fixed = text
+
+    # Copy to clipboard
+    try:
+        p = subprocess.Popen(["xclip", "-selection", "clipboard"], stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        p.communicate(input=fixed.encode("utf-8"))
+    except Exception:
+        pass
+    try:
+        p = subprocess.Popen(["xclip", "-selection", "primary"], stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        p.communicate(input=fixed.encode("utf-8"))
+    except Exception:
+        pass
+
+    run_cmd(["copyq", "copy", fixed])
+
+    # Wait for modifier key release then Auto-Paste
+    time.sleep(0.2)
+    run_cmd(["copyq", "paste"])
+
+    # Notify
+    msg = f"قبل: {text}\nبعد: {fixed}"
+    run_cmd(["notify-send", "-u", "normal", "✨ تم تصحيح ولصق النص!", msg])
+    run_cmd(["copyq", "popup", "✨ تم تصحيح النص", f"{fixed}\n(تم استبداله ولصقه تلقائياً)"])
+
+if __name__ == "__main__":
+    main()

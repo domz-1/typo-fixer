@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Typo Fixer & AutoCorrect
+Comment=Fix spelling, grammar, and mistyped text automatically
+Exec=/home/adham/.local/bin/fix-typo.py
+Icon=accessories-dictionary
+Terminal=false
+Type=Application
+Categories=Utility;TextTools;
