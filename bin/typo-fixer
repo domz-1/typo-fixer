@@ -43,24 +43,36 @@ ARABIC_COMMON_WORDS = {
     "جميل", "حلو", "كويس", "شكر", "معك", "معي", "عندي", "عندك", "فيه", "فيها", "منك", "مني"
 }
 
-# Keyboard layout character maps
-EN_CHARS = "qwertyuiop[]asdfghjkl;'zxcvbnm,./`QWERTYUIOP{}ASDFGHJKL:\"ZXCVBNM<>?~"
-AR_CHARS = "ضصثقفغعهخحجدشسيبلاتنمكطئءؤرىةوزظذًٌَُلإإ‘÷×؛<>ٍِ][لأأـ،/:\"~ْ}{لآآ’،.؟ّ"
+# Common English names and modern tech words
+COMMON_NAMES_AND_TECH = {
+    "ameen", "mohamed", "ahmed", "ali", "omar", "youssef", "mahmoud", "adham", "amr",
+    "khaled", "mostafa", "hassan", "hussein", "sayed", "tarek", "fatima", "mariam", "nour",
+    "youtuber", "youtube", "google", "facebook", "twitter", "github", "docker", "discord", "notion"
+}
+WORDS.update(COMMON_NAMES_AND_TECH)
 
-en_to_ar_map = dict(zip(EN_CHARS, AR_CHARS))
-en_to_ar_map["b"] = "لا"
-ar_to_en_map = {v: k for k, v in zip(EN_CHARS, AR_CHARS)}
-ar_to_en_map["لا"] = "b"
-ar_to_en_map["لأ"] = "G"
-ar_to_en_map["لإ"] = "T"
-ar_to_en_map["لآ"] = "B"
+# Keyboard layout character maps
+EN_TO_AR = {
+    "q": "ض", "w": "ص", "e": "ث", "r": "ق", "t": "ف", "y": "غ", "u": "ع", "i": "ه", "o": "خ", "p": "ح", "[": "ج", "]": "د",
+    "a": "ش", "s": "س", "d": "ي", "f": "ب", "g": "ل", "h": "ا", "j": "ت", "k": "ن", "l": "م", ";": "ك", "'": "ط",
+    "z": "ئ", "x": "ء", "c": "ؤ", "v": "ر", "b": "لا", "n": "ى", "m": "ة", ",": "و", ".": "ز", "/": "ظ", "`": "ذ",
+    "~": "ّ", "Q": "َ", "W": "ً", "E": "ُ", "R": "ٌ", "T": "لإ", "Y": "إ", "U": "‘", "I": "÷", "O": "×", "P": "؛",
+    "{": "<", "}": ">", "A": "ِ", "S": "ٍ", "D": "]", "F": "[", "G": "لأ", "H": "أ", "J": "ـ", "K": "،", "L": "/",
+    ":": ":", "\"": "\"", "Z": "~", "X": "ْ", "C": "}", "V": "{", "B": "لآ", "N": "آ", "M": "'", "<": ",", ">": ".", "?": "؟"
+}
+
+AR_TO_EN = {v: k for k, v in EN_TO_AR.items()}
+AR_TO_EN["لا"] = "b"
+AR_TO_EN["لإ"] = "T"
+AR_TO_EN["لأ"] = "G"
+AR_TO_EN["لآ"] = "B"
 
 def ar_to_en(text):
-    t = text.replace("لا", "b").replace("لأ", "G").replace("لإ", "T").replace("لآ", "B")
-    return "".join(ar_to_en_map.get(c, c) for c in t)
+    t = text.replace("لإ", "T").replace("لأ", "G").replace("لآ", "B").replace("لا", "b")
+    return "".join(AR_TO_EN.get(c, c) for c in t)
 
 def en_to_ar(text):
-    return "".join(en_to_ar_map.get(c, c) for c in text)
+    return "".join(EN_TO_AR.get(c, c) for c in text)
 
 def detect_accidental_layout(text):
     has_ar = any('\u0600' <= c <= '\u06FF' for c in text)
@@ -72,32 +84,27 @@ def detect_accidental_layout(text):
         real_ar_count = sum(1 for w in ar_words if w in ARABIC_COMMON_WORDS)
         
         converted = ar_to_en(text)
-        en_words = [re.sub(r'[^\w]', '', w) for w in converted.lower().split()]
+        en_words = [re.sub(r'[^a-zA-Z]', '', w) for w in converted.lower().split()]
         en_matches = sum(1 for w in en_words if w in WORDS or w in COMMON_TYPOS)
 
-        if en_matches > 0 and (en_matches >= len(en_words) * 0.4):
-            if real_ar_count == 0 or en_matches > real_ar_count:
-                return converted, "en"
-        return text, "ar"
+        if en_matches > 0 and (en_matches >= len(en_words) * 0.35 or real_ar_count == 0):
+            return converted, "en", True
+        return text, "ar", False
 
     # 2. English text: check if it was typed accidentally instead of Arabic
-    if has_en and not has_ar:
-        en_words = [re.sub(r'[^\w]', '', w) for w in text.lower().split()]
-        en_matches = sum(1 for w in en_words if w in WORDS or w in COMMON_TYPOS or len(w) <= 2)
-        
-        # If English text already has high English validity, keep it English!
-        if en_matches >= len(en_words) * 0.3:
-            return text, "en"
-
+    if not has_ar:
         converted = en_to_ar(text)
-        ar_words = [re.sub(r'[^\w]', '', w) for w in converted.split()]
+        ar_words = [re.sub(r'[^\u0600-\u06FF]', '', w) for w in converted.split()]
         ar_matches = sum(1 for w in ar_words if w in ARABIC_COMMON_WORDS)
 
-        if ar_matches > 0 and (ar_matches >= len(ar_words) * 0.4):
-            return converted, "ar"
-        return text, "en"
+        en_words = [re.sub(r'[^a-zA-Z]', '', w) for w in text.lower().split()]
+        en_matches = sum(1 for w in en_words if w in WORDS or w in COMMON_TYPOS or len(w) <= 2)
 
-    return text, "auto"
+        if ar_matches > 0 and (ar_matches >= len(ar_words) * 0.35 or ar_matches > en_matches):
+            return converted, "ar", True
+        return text, "en", False
+
+    return text, "auto", False
 
 def run_cmd(cmd):
     try:
@@ -189,19 +196,32 @@ def format_punctuation_and_caps(text):
 def fix_text(text):
     if not text: return ""
     # 1. Accidental layout
-    text, detected_lang = detect_accidental_layout(text)
+    text, detected_lang, swapped_layout = detect_accidental_layout(text)
 
-    # 2. Dictionary & typo map pass (only if English)
-    if detected_lang in ["en", "auto"]:
-        text = fix_with_dictionary(text)
-
-    # 3. LanguageTool grammar / spelling check
-    try:
-        lt_fixed = fix_with_languagetool(text, lang=detected_lang)
-        if lt_fixed and lt_fixed.strip():
-            text = lt_fixed
-    except Exception:
-        pass
+    # 2. If layout was swapped, preserve proper nouns and apply typo map safely
+    if swapped_layout:
+        words = text.split()
+        fixed_words = []
+        for w in words:
+            clean = re.sub(r"[^\w']", "", w.lower())
+            if clean in COMMON_TYPOS:
+                rep = COMMON_TYPOS[clean]
+                if w.isupper(): rep = rep.upper()
+                elif w[0].isupper(): rep = rep.capitalize()
+                fixed_words.append(w.replace(clean, rep))
+            else:
+                fixed_words.append(w)
+        text = " ".join(fixed_words)
+    else:
+        # 3. Standard typo check
+        if detected_lang in ["en", "auto"]:
+            text = fix_with_dictionary(text)
+        try:
+            lt_fixed = fix_with_languagetool(text, lang=detected_lang)
+            if lt_fixed and lt_fixed.strip():
+                text = lt_fixed
+        except Exception:
+            pass
 
     # 4. Capitalization & Punctuation
     text = format_punctuation_and_caps(text)
