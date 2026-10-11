@@ -107,18 +107,33 @@ def run_cmd(cmd):
         return ""
 
 def get_text():
-    # Try copy from active selection
-    run_cmd(["copyq", "copy"])
-    time.sleep(0.04)
+    # Small pause to allow user to release Alt+Q modifier keys
+    time.sleep(0.15)
 
+    # 1. Try active primary selection (mouse-highlighted text)
     text = run_cmd(["xclip", "-o", "-selection", "primary"])
-    if text: return text
-    text = run_cmd(["xclip", "-o", "-selection", "clipboard"])
-    if text: return text
-    text = run_cmd(["copyq", "selection"])
-    if text: return text
+    if text and text.strip():
+        return text.strip()
+
+    # 2. Try copying highlighted text via synthetic Ctrl+C
+    try:
+        from pynput.keyboard import Key, Controller
+        kb = Controller()
+        with kb.pressed(Key.ctrl):
+            kb.press('c')
+            kb.release('c')
+        time.sleep(0.1)
+        text = run_cmd(["xclip", "-o", "-selection", "clipboard"])
+        if text and text.strip():
+            return text.strip()
+    except Exception:
+        pass
+
+    # 3. Fallback to copyq clipboard
     text = run_cmd(["copyq", "clipboard"])
-    if text: return text
+    if text and text.strip():
+        return text.strip()
+
     return ""
 
 def correct_word(w):
@@ -235,8 +250,20 @@ def main():
     run_cmd(["copyq", "copy", fixed])
 
     # Wait for modifier key release then Auto-Paste
-    time.sleep(0.2)
-    run_cmd(["copyq", "paste"])
+    time.sleep(0.15)
+    pasted = False
+    try:
+        from pynput.keyboard import Key, Controller
+        kb = Controller()
+        with kb.pressed(Key.ctrl):
+            kb.press('v')
+            kb.release('v')
+        pasted = True
+    except Exception:
+        pass
+
+    if not pasted:
+        run_cmd(["copyq", "paste"])
 
     # Notify
     msg = f"قبل: {text}\nبعد: {fixed}"
